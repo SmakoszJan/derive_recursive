@@ -1,10 +1,12 @@
 [package]
 name = "derive_recursive"
-version = "0.0.0"
+version = "1.0.0"
 authors = ["DragonGamesStudios <margos.michal@gmail.com>"]
-description = "A `cargo generate` template for quick-starting a procedural macro crate"
-keywords = ["template", "proc_macro", "procmacro", "utility"]
+description = "A utility derive macro for recursive trait implementations."
+keywords = ["proc_macro", "procmacro", "utility", "recursive", "auto"]
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/DragonGamesStudios/derive_recursive.git"
 
 [lib]
 proc-macro = true
