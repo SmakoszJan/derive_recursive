@@ -447,18 +447,18 @@ impl Parse for Aggregate {
 
 impl Parse for NoConstructAggregate {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        if input.peek(Token!(|)) {
-            input.parse::<Token!(|)>()?;
-            Ok(Self::Op(AggrOp::BitOr))
-        } else if input.peek(Token!(&)) {
-            input.parse::<Token!(&)>()?;
-            Ok(Self::Op(AggrOp::BitAnd))
-        } else if input.peek(Token!(||)) {
+        if input.peek(Token!(||)) {
             input.parse::<Token!(||)>()?;
             Ok(Self::Op(AggrOp::LogicOr))
         } else if input.peek(Token!(&&)) {
             input.parse::<Token!(&&)>()?;
             Ok(Self::Op(AggrOp::LogicAnd))
+        } else if input.peek(Token!(|)) {
+            input.parse::<Token!(|)>()?;
+            Ok(Self::Op(AggrOp::BitOr))
+        } else if input.peek(Token!(&)) {
+            input.parse::<Token!(&)>()?;
+            Ok(Self::Op(AggrOp::BitAnd))
         } else if input.peek(Token![+]) {
             input.parse::<Token![+]>()?;
             Ok(Self::Op(AggrOp::Add))
