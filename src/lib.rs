@@ -15,7 +15,7 @@ extern crate proc_macro;
 use proc_macro::{TokenStream};
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 
-use syn::{parse_macro_input, DeriveInput, Data, DataStruct, Meta, MetaList, braced, Token, Error, token, Generics, Path, Signature, AngleBracketedGenericArguments, FnArg, Attribute, Field, Fields, DataEnum, Variant};
+use syn::{parse_macro_input, DeriveInput, Data, DataStruct, Meta, MetaList, braced, Token, Error, token, Generics, Path, Signature, AngleBracketedGenericArguments, FnArg, Attribute, Field, Fields, DataEnum, Variant, Expr};
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
@@ -513,6 +513,7 @@ impl Parse for Wrap {
 struct Details {
     marker: Option<Ident>,
     aggregate: Option<Aggregate>,
+    init: Option<Expr>,
     variant_marker: Option<Ident>,
     variant_aggregate: Option<NoConstructAggregate>,
     wrap: Option<Wrap>,
@@ -529,6 +530,7 @@ impl Parse for Details {
         let mut variant_marker = None;
         let mut variant_aggregate = None;
         let mut wrap = None;
+        let mut init = None;
 
         while !content.is_empty() {
             let key: Ident = content.parse()?;
@@ -560,6 +562,11 @@ impl Parse for Details {
                 } else {
                     return Err(Error::new(key.span(), "key defined twice"))
                 },
+                "init" => if wrap.is_none() {
+                    init = Some(content.parse()?);
+                } else {
+                    return Err(Error::new(key.span(), "key defined twice"))
+                },
                 _ => return Err(Error::new(key.span(), "invalid key"))
             }
 
@@ -586,7 +593,8 @@ impl Parse for Details {
             aggregate,
             variant_marker,
             variant_aggregate,
-            wrap
+            wrap,
+            init
         })
     }
 }
