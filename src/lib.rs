@@ -12,10 +12,10 @@
  */
 
 extern crate proc_macro;
-use proc_macro::{TokenStream};
+use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 
-use syn::{parse_macro_input, DeriveInput, Data, DataStruct, Meta, MetaList, braced, Token, Error, token, Generics, Path, Signature, AngleBracketedGenericArguments, FnArg, Attribute, Field, Fields, DataEnum, Variant, Expr};
+use syn::{parse_macro_input, DeriveInput, Data, DataStruct, Meta, MetaList, braced, Token, Error, token, Generics, Path, Signature, AngleBracketedGenericArguments, FnArg, Attribute, Fields, DataEnum, Expr};
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
@@ -61,7 +61,7 @@ impl FuncImpl {
                 let mut partials = Vec::new();
 
                 for (i, f) in fields.iter().enumerate() {
-                    if verify_marker(f, v)? {
+                    if verify_marker(&f.attrs, v)? {
                         partials.push((i, f));
                     }
                 }
@@ -80,21 +80,36 @@ impl FuncImpl {
         let fn_ident = &self.sig.ident;
         let variadic = &self.sig.variadic;
 
-        let partials = partials
-            .map(|(i, f)| {
-                let arg2 = (0..).take(arg_count).map(|x| format_ident!("arg{x}"));
-                let ty = &f.ty;
-                let recv = if has_receiver {
-                    let v_it = format_ident!("f{i}");
-                    quote! { #v_it, }
-                } else {
-                    quote! {}
-                };
+        let mut partials2 = Vec::new();
+        for (i, f) in partials {
+            let arg2 = (0..).take(arg_count).map(|x| format_ident!("arg{x}"));
+            let ty = &f.ty;
+            let recv = if has_receiver {
+                let v_it = format_ident!("f{i}");
+                quote! { #v_it, }
+            } else {
+                quote! {}
+            };
 
-                quote! {
-                        <#ty as #trait_path> :: #fn_ident(#recv #(#arg2,)* #variadic) #question
-                    }
+            let func_def = quote! { <#ty as #trait_path> :: #fn_ident };
+            let func = if let Some(marker) = self.details.override_marker.as_ref() {
+                if let Some(func) = verify_override(&f.attrs, marker)? {
+                    quote! { (#func) }
+                } else {
+                    func_def
+                }
+            } else {
+                func_def
+            };
+
+            partials2.push(quote! {
+                #func (#recv #(#arg2,)* #variadic) #question
             });
+        }
+        let partials = partials2;
+
+        // Include init param
+        let partials = self.details.init.as_ref().into_iter().map(|x| quote! {(#x)}).chain(partials);
 
         Ok(if self.details.aggregate == Some(Aggregate::Construct) {
             match fields {
@@ -123,7 +138,7 @@ impl FuncImpl {
         let where_clause = self.sig.generics.where_clause.take();
         let question = self.details.wrap.is_some().then_some(Token!(?)(Span::call_site()));
 
-        if self.details.variant_aggregate.is_some() || self.details.variant_marker.is_some() {
+        if self.details.variant_aggregate.is_some() || self.details.variant_marker.is_some() || self.details.variant_init.is_some() {
             return Err(Error::new(self.details.span, "variant-related parameters are not allowed on struct impls"));
         }
 
@@ -224,7 +239,7 @@ impl FuncImpl {
                 let mut partials = Vec::new();
 
                 for v in &data.variants {
-                    if verify_marker(v, marker)? {
+                    if verify_marker(&v.attrs, marker)? {
                         partials.push(v);
                     }
                 }
@@ -241,6 +256,10 @@ impl FuncImpl {
 
             if self.details.variant_marker.is_some() {
                 return Err(Error::new(self.details.span, "in non-associated functions, variant marker filter is invalid"));
+            }
+
+            if self.details.variant_init.is_some() {
+                return Err(Error::new(self.details.span, "in non-associated functions, variant init expr is invalid"));
             }
 
             let v_id = partials.clone().map(|x| &x.ident);
@@ -268,7 +287,17 @@ impl FuncImpl {
             let mut variant_code = Vec::new();
 
             for variant in partials {
-                variant_code.push(self.derive_fields(&variant.fields, trait_path, &question)?);
+                let over = self.details.override_marker
+                    .as_ref()
+                    .map(|marker| verify_override(&variant.attrs, marker))
+                    .transpose()?
+                    .flatten()
+                    .map(|func| {
+                        Ok(quote! {#func})
+                    })
+                    .unwrap_or_else(|| self.derive_fields(&variant.fields, trait_path, &question))?;
+
+                variant_code.push(over);
             }
 
             if self.details.aggregate == Some(Aggregate::Construct) {
@@ -297,7 +326,8 @@ impl FuncImpl {
                 return Err(Error::new(data.variants.span(), "one variant must be marked for construction"))
             }
         } else {
-            let mut variant_code = Vec::new();
+            let init = self.details.variant_init.as_ref();
+            let mut variant_code = vec![quote! { #init }];
 
             for variant in partials {
                 variant_code.push(self.derive_fields(&variant.fields, trait_path, &question)?);
@@ -516,8 +546,10 @@ struct Details {
     init: Option<Expr>,
     variant_marker: Option<Ident>,
     variant_aggregate: Option<NoConstructAggregate>,
+    variant_init: Option<Expr>,
     wrap: Option<Wrap>,
-    span: Span
+    span: Span,
+    override_marker: Option<Ident>
 }
 
 impl Parse for Details {
@@ -531,6 +563,8 @@ impl Parse for Details {
         let mut variant_aggregate = None;
         let mut wrap = None;
         let mut init = None;
+        let mut variant_init = None;
+        let mut override_marker = None;
 
         while !content.is_empty() {
             let key: Ident = content.parse()?;
@@ -562,8 +596,18 @@ impl Parse for Details {
                 } else {
                     return Err(Error::new(key.span(), "key defined twice"))
                 },
-                "init" => if wrap.is_none() {
+                "init" => if init.is_none() {
                     init = Some(content.parse()?);
+                } else {
+                    return Err(Error::new(key.span(), "key defined twice"))
+                },
+                "variant_init" => if variant_init.is_none() {
+                    variant_init = Some(content.parse()?);
+                } else {
+                    return Err(Error::new(key.span(), "key defined twice"))
+                },
+                "override_marker" => if override_marker.is_none() {
+                    override_marker = Some(content.parse()?);
                 } else {
                     return Err(Error::new(key.span(), "key defined twice"))
                 },
@@ -585,6 +629,14 @@ impl Parse for Details {
             if variant_aggregate.is_some() {
                 return Err(Error::new(span, "variant aggregate cannot be given when aggregate is '{}'"));
             }
+
+            if init.is_some() {
+                return Err(Error::new(span, "init expr cannot be given when aggregate is '{}'"));
+            }
+
+            if variant_init.is_some() {
+                return Err(Error::new(span, "init expr cannot be given when aggregate is '{}'"));
+            }
         }
 
         Ok(Details {
@@ -594,34 +646,73 @@ impl Parse for Details {
             variant_marker,
             variant_aggregate,
             wrap,
-            init
+            init,
+            variant_init,
+            override_marker
         })
     }
 }
 
-trait GetAttrs {
-    fn get_attrs(&self) -> &[Attribute];
+enum Marker {
+    Ident(Ident),
+    Override(Override)
 }
 
-impl GetAttrs for Field {
-    fn get_attrs(&self) -> &[Attribute] {
-        &self.attrs
+struct Override {
+    ident: Ident,
+    _eq: Token![=],
+    func: Expr
+}
+
+impl Parse for Marker {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let ident = input.parse()?;
+
+        Ok(if input.is_empty() {
+            Self::Ident(ident)
+        } else {
+            Self::Override(Override {
+                ident,
+                _eq: input.parse()?,
+                func: input.parse()?
+            })
+        })
     }
 }
 
-impl GetAttrs for Variant {
-    fn get_attrs(&self) -> &[Attribute] {
-        &self.attrs
-    }
-}
-
-fn verify_marker<T: GetAttrs>(x: &T, marker: &Ident) -> syn::Result<bool> {
+fn verify_marker(attrs: &[Attribute], marker: &Ident) -> syn::Result<bool> {
     let mut found = false;
 
-    for attr in x.get_attrs() {
+    for attr in attrs {
         if attr.meta.path().is_ident("recursive") {
             if let Meta::List(MetaList { tokens, .. }) = &attr.meta {
-                found = syn::parse2::<Ident>(tokens.clone())? == *marker;
+                if let Marker::Ident(id) = syn::parse2(tokens.clone())? {
+                    found = id == *marker
+                }
+            } else {
+                return Err(Error::new(attr.span(), "invalid macro usage"));
+            }
+        }
+    }
+
+    Ok(found)
+}
+
+fn verify_override(attrs: &[Attribute], marker: &Ident) -> syn::Result<Option<Expr>> {
+    let mut found = None;
+
+    for attr in attrs {
+        if attr.meta.path().is_ident("recursive") {
+            if let Meta::List(MetaList { tokens, .. }) = &attr.meta {
+                if let Marker::Override(over) = syn::parse2(tokens.clone())? {
+                    if over.ident == *marker {
+                        if found.is_some() {
+                            return Err(Error::new(attr.span(), "override defined twice"));
+                        }
+
+                        found = Some(over.func);
+                    }
+                }
             } else {
                 return Err(Error::new(attr.span(), "invalid macro usage"));
             }
