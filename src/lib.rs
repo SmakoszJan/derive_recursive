@@ -225,6 +225,7 @@ impl FuncImpl {
             ..
         } = &self.sig;
 
+        let arg_count = self.sig.inputs.len();
         let arg1 = (0..).map(|i| format_ident!("arg{i}"));
 
         let ty = inputs.iter().flat_map(|x| match x {
@@ -293,29 +294,34 @@ impl FuncImpl {
                     .transpose()?
                     .flatten()
                     .map(|func| {
-                        Ok(quote! {#func})
+                        let field_var = (0..variant.fields.len()).map(|i| format_ident!("f{i}"));
+                        let arg2 = (0..).take(arg_count-1).map(|x| format_ident!("arg{x}"));
+                        Ok::<_, Error>(quote! {(#func)(#(#field_var,)* #(#arg2,)* #variadic)})
                     })
-                    .unwrap_or_else(|| self.derive_fields(&variant.fields, trait_path, &question))?;
+                    .unwrap_or_else(
+                        || {
+                            let code = self.derive_fields(&variant.fields, trait_path, &question)?;
+                            let v = &variant.ident;
+                            if self.details.aggregate == Some(Aggregate::Construct) {
+                                Ok(quote! {
+                                    Self::#v #code
+                                })
+                            } else {
+                                Ok(code)
+                            }
+                        }
+                    )?;
 
                 variant_code.push(over);
             }
 
-            if self.details.aggregate == Some(Aggregate::Construct) {
-                let v_id2 = v_id.clone();
-
-                quote! {
-                    match self {
-                        #(Self::#v_id #destructured => Self::#v_id2 #variant_code,)*
-                    }
-                }
-            } else {
-                quote! {
-                    match self {
-                        #(Self::#v_id #destructured => #variant_code,)*
-                    }
+            quote! {
+                match self {
+                    #(Self::#v_id #destructured => #variant_code,)*
                 }
             }
         } else if self.details.aggregate == Some(Aggregate::Construct) {
+            // associated constructive (no override allowed)
             if let Some(variant) = partials.next() {
                 let v_id = &variant.ident;
                 let construct = self.derive_fields(&variant.fields, trait_path, &question)?;
@@ -326,11 +332,25 @@ impl FuncImpl {
                 return Err(Error::new(data.variants.span(), "one variant must be marked for construction"))
             }
         } else {
-            let init = self.details.variant_init.as_ref();
-            let mut variant_code = vec![quote! { #init }];
+            // associated non-constructive
+            let mut variant_code = self.details.variant_init.as_ref()
+                .map_or_else(Vec::new, |init| vec![quote! { #init }]);
 
             for variant in partials {
-                variant_code.push(self.derive_fields(&variant.fields, trait_path, &question)?);
+                let over = self.details.override_marker
+                    .as_ref()
+                    .map(|marker| verify_override(&variant.attrs, marker))
+                    .transpose()?
+                    .flatten()
+                    .map(|func| {
+                        let arg2 = (0..).take(arg_count).map(|x| format_ident!("arg{x}"));
+                        Ok(quote! {(#func)(#(#arg2,)* #variadic)})
+                    })
+                    .unwrap_or_else(
+                        || self.derive_fields(&variant.fields, trait_path, &question)
+                    )?;
+
+                variant_code.push(over);
             }
 
             if let Some(aggregate) = self.details.variant_aggregate {
@@ -409,7 +429,9 @@ impl TraitImpl {
         let mut impls = Vec::new();
 
         for f in functions {
-            impls.push(derive_fn(f, &trait_, data)?);
+            let imp = derive_fn(f, &trait_, data)?;
+            // panic!("{imp}");
+            impls.push(imp);
         }
 
         Ok(quote! {
@@ -447,13 +469,13 @@ impl NoConstructAggregate {
                 #path(#x, #y)
             },
             Self::Op(op) => match op {
-                AggrOp::BitOr => quote! { {#x | #y} },
-                AggrOp::BitAnd => quote! { {#x & #y} },
-                AggrOp::LogicOr => quote! { {#x || #y} },
-                AggrOp::LogicAnd => quote! { {#x && #y} },
-                AggrOp::Add => quote! { {#x + #y} },
-                AggrOp::Mul => quote! { {#x * #y} },
-                AggrOp::Unit => quote! { {#x; #y} }
+                AggrOp::BitOr => quote! { ({#x | #y}) },
+                AggrOp::BitAnd => quote! { ({#x & #y}) },
+                AggrOp::LogicOr => quote! { ({#x || #y}) },
+                AggrOp::LogicAnd => quote! { ({#x && #y}) },
+                AggrOp::Add => quote! { ({#x + #y}) },
+                AggrOp::Mul => quote! { ({#x * #y}) },
+                AggrOp::Unit => quote! { ({#x; #y}) }
             }
         }
     }

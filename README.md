@@ -248,6 +248,23 @@ impl Size for Foo {
 }
 ```
 
+## Additional attributes
+
+### `init` and `variant_init`
+
+You can use the `init` attribute (accepts an expression) to add a special *init* expression that will be aggregated with subsequent recursive calls. The init expression is always the first executed one. You can achieve a similar result when aggregating enum variants using `variant_init`.
+
+### `override_marker`
+
+The `override_marker` attribute can be used to add a custom function to call in place of a recursive call for a specific variant/field. The same attribute can be used for both. Variants and fields should be marked, like with other marker attributes, with one change:
+
+```rust
+#[recursive(marker_name = func_here)]
+struct Foo;
+```
+
+The right hand side of the statement should be an expression returning a function (which means it also allows closures).
+
 ## Disclaimer
 
 Note, that this library quite fresh, has not been very tested and is limited in some ways (most notably, it has very limited support for unit structs and variants). However, it should be good enough for most use cases. Should you discover a bug or stumble upon an idea on how to improve the library (including things you need, but the library does not provide), feel free to open an issue (and maybe make the change yourself and add a PR, if you have the time). Note that I won't be working on the library a lot, since I have other, more important projects.
