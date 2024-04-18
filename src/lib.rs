@@ -279,7 +279,7 @@ impl FuncImpl {
                     }
                     Fields::Unnamed(_) => {
                         quote! {
-                            (#(#field_var)*)
+                            (#(#field_var),*)
                         }
                     }
                     Fields::Unit => quote!{}
