@@ -1,6 +1,6 @@
 [package]
 name = "derive_recursive"
-version = "1.0.3"
+version = "1.0.4"
 authors = ["DragonGamesStudios <margos.michal@gmail.com>"]
 description = "A utility derive macro for recursive trait implementations."
 keywords = ["proc_macro", "procmacro", "utility", "recursive", "auto"]
