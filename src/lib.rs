@@ -15,8 +15,8 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 
-use syn::{parse_macro_input, DeriveInput, Data, DataStruct, Meta, MetaList, braced, Token, Error, token, Generics, Path, Signature, AngleBracketedGenericArguments, FnArg, Attribute, Fields, DataEnum, Expr};
-use quote::{format_ident, quote};
+use syn::{braced, parse_macro_input, token, AngleBracketedGenericArguments, Attribute, Data, DataEnum, DataStruct, DeriveInput, Error, Expr, Fields, FnArg, Generics, ImplItemConst, ImplItemType, Meta, MetaList, Path, Signature, Token};
+use quote::{format_ident, quote, ToTokens as _};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::token::Question;
@@ -382,6 +382,8 @@ struct TraitImpl {
     generics: Generics,
     trait_: Path,
     self_generics: Option<AngleBracketedGenericArguments>,
+    consts: Vec<ImplItemConst>,
+    types: Vec<ImplItemType>,
     functions: Vec<FuncImpl>,
 }
 
@@ -401,16 +403,26 @@ impl Parse for TraitImpl {
         let content;
         braced!(content in input);
 
+        let mut consts = Vec::new();
+        let mut types = Vec::new();
         let mut functions = Vec::new();
 
         while !content.is_empty() {
-            functions.push(content.parse()?);
+            if content.peek(Token![const]) {
+                consts.push(content.parse()?);
+            } else if content.peek(Token![type]) {
+                types.push(content.parse()?);
+            } else {
+                functions.push(content.parse()?);
+            }
         }
 
         Ok(Self {
             generics,
             trait_,
             self_generics,
+            consts,
+            types,
             functions
         })
     }
@@ -422,11 +434,21 @@ impl TraitImpl {
             mut generics,
             trait_,
             self_generics,
+            consts,
+            types,
             functions
         } = self;
         let where_clause = generics.where_clause.take();
 
         let mut impls = Vec::new();
+
+        for c in consts {
+            impls.push(c.into_token_stream());
+        }
+
+        for t in types {
+            impls.push(t.into_token_stream());
+        }
 
         for f in functions {
             let imp = derive_fn(f, &trait_, data)?;
